@@ -4,7 +4,8 @@ Back-end Applications with  RESTful API's for the backend applications
 Steps to execute the Application-
 1. Download/fork project at local.
 2. Follow stepsfor database setup and execution
-       1. Open the terminals for DiscussionForumAPI and go to directory
+
+      1. Open the terminals for DiscussionForumAPI and go to directory
 		 
          >> cd DiscussionForum-SQLite/DiscussionForumAPI
 		 

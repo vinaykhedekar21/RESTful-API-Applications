@@ -1,0 +1,4 @@
+graft DiscussionForumAPI/templates
+graft DiscussionForumAPI/static
+include DiscussionForumAPI/schema.sql
+include DiscussionForumAPI/insertScript.sql

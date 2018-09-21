@@ -9,7 +9,8 @@ drop table if exists forum;
 create table forum (
   forum_id integer primary key autoincrement,
   name text not null,
-  creator text not null
+  user_id integer not null,
+  FOREIGN KEY(user_id) REFERENCES user(user_id)
 );
 
 drop table if exists thread;
@@ -18,18 +19,16 @@ create table thread (
   forum_id integer not null,
   title text not null,
   text text not null,
-  creator text not null,
-  timestamp text not null,
   FOREIGN KEY(forum_id) REFERENCES forum(forum_id)	
 );
 
 drop table if exists post;
 create table post (
   id integer primary key autoincrement,
-  forum_id integer not null,
   thread_id integer not null,
-  author text not null,
+  user_id integer not null,
   text text not null,
-  timestamp text not null, --add db timestamp
-  FOREIGN KEY(thread_id) REFERENCES thread(thread_id)	
+  timestamp DateTime not null,
+  FOREIGN KEY(thread_id) REFERENCES thread(thread_id),
+  FOREIGN KEY(user_id) REFERENCES user(user_id)
 );

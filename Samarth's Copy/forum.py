@@ -31,7 +31,7 @@ class Forumname:
         connection = sqlite3.connect('data.db')
         cursor = connection.cursor()
 
-        query = "SELECT * FROM forums ORDER BY id DESC"
+        query = "SELECT * FROM forums ORDER BY forum_id DESC"
         result = cursor.execute(query)
         row = result.fetchone()
         if row:
@@ -42,6 +42,21 @@ class Forumname:
         connection.close()
         return forum_id
 
+    @classmethod
+    def get_user_id(cls, username):
+        connection = sqlite3.connect('data.db')
+        cursor = connection.cursor()
+
+        query = "SELECT user_id FROM users where username = ?"
+        result = cursor.execute(query, (username,))
+        row = result.fetchone()
+        if row:
+            user_id = (row[0])
+        else:
+            user_id = None
+
+        connection.close()
+        return user_id
 class Forum(Resource):
     parser = reqparse.RequestParser()
     parser.add_argument('name',
@@ -56,7 +71,7 @@ class Forum(Resource):
     def get(self):
         connection = sqlite3.connect('data.db')
         cursor = connection.cursor()
-        query = "SELECT * FROM forums"
+        query = "SELECT f.forum_id as id, f.name as name, u.username as creator FROM forums f, users u where f.user_id = u.user_id"
         result = cursor.execute(query)
         rows = result.fetchall()
         connection.close()
@@ -65,7 +80,7 @@ class Forum(Resource):
             for row in rows:
                 forumdic.append({"id":row[0],"name":row[1],"creator":row[2]})
             return forumdic, 200
-        return {},404
+        return {}
     @jwt_required()
     def post(self):
         data = Forum.parser.parse_args()
@@ -73,9 +88,10 @@ class Forum(Resource):
             return {"message":"forum with that name already exists"}, 409
         connection = sqlite3.connect('data.db')
         cursor = connection.cursor()
-
-        query = "INSERT INTO forums VALUES (NULL,?,?)"
-        cursor.execute(query, (data['name'], current_identity.username))
+        user_id = Forumname.get_user_id(current_identity.username)
+        if user_id:
+            query = "INSERT INTO forums VALUES (NULL,?,?)"
+            cursor.execute(query, (data['name'], user_id))
 
         connection.commit()
         resp = Response(status=201, mimetype='application/json')

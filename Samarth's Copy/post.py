@@ -16,7 +16,7 @@ class Postname:
         connection = sqlite3.connect('data.db')
         cursor = connection.cursor()
 
-        query = "SELECT * FROM threads WHERE id = ? and forumid = ?"
+        query = "SELECT * FROM threads WHERE thread_id = ? and forum_id = ?"
         result = cursor.execute(query, (threadid, forumid))
         row = result.fetchone()
         connection.close()
@@ -24,6 +24,21 @@ class Postname:
             return row
         return None
 
+    @classmethod
+    def get_user_id(cls, username):
+        connection = sqlite3.connect('data.db')
+        cursor = connection.cursor()
+
+        query = "SELECT user_id FROM users where username = ?"
+        result = cursor.execute(query, (username,))
+        row = result.fetchone()
+        if row:
+            user_id = (row[0])
+        else:
+            user_id = None
+
+        connection.close()
+        return user_id
     # @classmethod
     # def get_Thread_id(cls):
     #     connection = sqlite3.connect('data.db')
@@ -41,7 +56,7 @@ class Postname:
     #     return thread_id
 class Post(Resource):
     parser = reqparse.RequestParser()
-    parser.add_argument('content',
+    parser.add_argument('text',
                         type=str,
                         required=True,
                         help="This field cannot be blank.")
@@ -55,14 +70,14 @@ class Post(Resource):
             return {"message":"forum / thread does not exist"}, 404
         connection = sqlite3.connect('data.db')
         cursor = connection.cursor()
-        query = "SELECT * FROM posts where threadid = ? and forumid = ? order by timestamp desc"
+        query = "SELECT u.username as author, p.text, p.timestamp FROM posts p, threads t, users u where t.thread_id = p.thread_id and t.thread_id = ? and t.forum_id = ?  and u.user_id  = p.user_id order by timestamp desc"
         result = cursor.execute(query, (thread_id,forum_id))
         rows = result.fetchall()
         connection.close()
         postlist = []
         if rows:
             for row in rows:
-                postlist.append({"author": row[4], "text": row[3], "timestamp": row[5]})
+                postlist.append({"author": row[0], "text": row[1], "timestamp": row[2]})
             return postlist, 200
         return {}, 404
     @jwt_required()
@@ -72,9 +87,9 @@ class Post(Resource):
             return {"message":"forum / thread does not exist"}, 404
         connection = sqlite3.connect('data.db')
         cursor = connection.cursor()
-
-        query = "INSERT INTO posts VALUES (NULL,?,?,?,?,?)"
-        cursor.execute(query, (forum_id, thread_id, data['content'],current_identity.username, datetime.now()))
+        user_id = Postname.get_user_id(current_identity.username)
+        query = "INSERT INTO posts VALUES (NULL,?,?,?,?)"
+        cursor.execute(query, (thread_id, user_id, data['text'], datetime.now()))
         #
         # query = "INSERT INTO forums VALUES (NULL,?,?)"
         # cursor.execute(query, (forum_id, data['creator']))

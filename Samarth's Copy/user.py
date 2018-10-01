@@ -1,7 +1,9 @@
 import sqlite3
 from flask_restful import Resource, reqparse
-from flask_jwt import jwt_required,current_identity
+from flask_jwt import jwt_required, current_identity
 from flask import Response
+
+
 class User:
     def __init__(self, _id, username, password):
         self.id = _id
@@ -29,7 +31,7 @@ class User:
         connection = sqlite3.connect('data.db')
         cursor = connection.cursor()
 
-        query = "SELECT * FROM users WHERE id = ?"
+        query = "SELECT * FROM users WHERE user_id = ?"
         result = cursor.execute(query, (_id,))
         row = result.fetchone()
         if row:
@@ -39,6 +41,7 @@ class User:
 
         connection.close()
         return user
+
 
 class UserUpdation(Resource):
     parser = reqparse.RequestParser()
@@ -82,6 +85,7 @@ class UserRegister(Resource):
                         type=str,
                         required=True,
                         help="This field cannot be blank.")
+
     def post(self):
         data = UserRegister.parser.parse_args()
 

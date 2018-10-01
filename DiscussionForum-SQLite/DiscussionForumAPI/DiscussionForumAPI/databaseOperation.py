@@ -1,32 +1,11 @@
 import flask
 import sqlite3
 from flask import g
-from flask_restful import Api
-from flask_jwt import JWT
-from security import authenticate, identity
-from user import UserRegister, UserUpdation
-from forum import Forum
-from thread import Thread
-from post import Post
 
-
-app = flask.Flask('DiscussionForumAPI')
+app = flask.Flask('DiscussionForum')
 app.config.from_object(__name__)
 app.config.from_envvar('DISCUSSIONFORUMAPI_SETTINGS', silent=True)
-app.secret_key = 'sam'
-api = Api(app)
-
 app.config["DEBUG"] = True
-
-
-jwt = JWT(app, authenticate, identity)  # /auth
-
-# endpoint signatures for discussion forum
-api.add_resource(Forum, '/forums')
-api.add_resource(Thread, '/forums/<forum_id>')
-api.add_resource(Post, '/forums/<forum_id>/<thread_id>')
-api.add_resource(UserRegister, '/users')
-api.add_resource(UserUpdation, '/users/<string:username>')
 
 DATABASE = '/tmp/DiscussionForum.db'
 
@@ -96,4 +75,4 @@ def query_db(query, args=(), one=False):
     return (rv[0] if rv else None) if one else rv
 
 
-app.run(port=5000, debug=True)
+app.run()

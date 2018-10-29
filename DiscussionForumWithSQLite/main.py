@@ -1,22 +1,28 @@
-import sqlite3
 from datetime import datetime
 import flask
+import csv
+import uuid
 from flask import jsonify, request, session, url_for, redirect, make_response, \
     render_template, abort, g, flash, _app_ctx_stack
 from flask import Response
 from flask_restful import reqparse
+from pip._internal.models import format_control
 from werkzeug import check_password_hash, generate_password_hash
 from flask_basicauth import BasicAuth
-
+import sqlite3
 
 app = flask.Flask('discussion_forum')
 app.config.from_object(__name__)
 app.config.from_envvar('DISCUSSIONFORUMAPI_SETTINGS', silent=True)
 app.config["DEBUG"] = True
-
-DATABASE = '/tmp/DiscussionForum.db'
+#DATABASES = 'DATABASE0','DATABASE1','DATABASE2'
+DATABASES = '/tmp/discussionformapi00.db','/tmp/discussionformapi01.db','/tmp/discussionformapi02.db'
+DATABASE = '/tmp/discussionformapi.db'
 PER_PAGE = 30
 SECRET_KEY = b'_3myapplication'
+
+# sqlite3.register_converter('GUID', lambda b: uuid.UUID(bytes_le=b))
+# sqlite3.register_adapter(uuid.UUID, lambda u: buffer(u.bytes_le))
 
 
 class DiscussionForumBasicAuth(BasicAuth):
@@ -51,25 +57,56 @@ def fetch_user(username):
 def get_db():
     db = getattr(g, '_database', None)
     if db is None:
-        db = g._database = sqlite3.connect(DATABASE)
+        #db = g._database = sqlite3.connect(DATABASE)
+        db = sqlite3.connect(DATABASE, detect_types=sqlite3.PARSE_DECLTYPES)
     return db
 
 
 # close connection when not in use
 @app.teardown_appcontext
-def close_connection(exception):
-    db = getattr(g, '_database', None)
-    if db is not None:
-        db.close()
+def close_database(exception):
+    """Closes the database again at the end of the request."""
+    top = _app_ctx_stack.top
+    if hasattr(top, 'sqlite_db'):
+        top.sqlite_db.close()
 
+def get_all_db():
+    """Opens a new database connection to all the database shards."""
+    connections = []
+    for db in DATABASES:
+        print(db)
+        #connect = sqlite3.connect(app.config[db], detect_types=sqlite3.PARSE_DECLTYPES)
+        connect = sqlite3.connect(db, detect_types=sqlite3.PARSE_DECLTYPES)
+        connect.row_factory = sqlite3.Row
+        connections.append(connect)
+    return connections
 
-# create initial schema's
+def get_shard_db(thread_id):
+    dbNumber = getdbNumber(thread_id)
+    print(dbNumber)
+    DATABASE = DATABASES[dbNumber]
+    print(DATABASE)
+    sqlite_db = 'sqlite_db' + str(dbNumber)
+    top = _app_ctx_stack.top
+    if not hasattr(top, sqlite_db):
+        print("Going to create new instance")
+        top.sqlite_db = sqlite3.connect(DATABASE, detect_types=sqlite3.PARSE_DECLTYPES)
+        top.sqlite_db.row_factory = sqlite3.Row
+    else:
+        print("Instance is already created")
+    return top.sqlite_db
 def create_schema():
-    with app.app_context():
-        db = get_db()
-        with app.open_resource('createSchema.sql', mode='r') as f:
-            db.cursor().executescript(f.read())
-        db.commit()
+    db = get_db()
+    with app.open_resource('createSchema.sql', mode='r') as f:
+        db.cursor().executescript(f.read())
+        print(db)
+    connections = get_all_db()
+    for connect in connections:
+        print(connect)
+        with app.open_resource('createSchema1.sql', mode='r') as f:
+            connect.cursor().executescript(f.read())
+
+
 
 
 @app.cli.command('createschema')
@@ -82,11 +119,47 @@ def create_schema_command():
 # Insert dummy data into database
 def insert_data():
     with app.app_context():
-        db = get_db()
         with app.open_resource('insertData.sql', mode='r') as f:
+            db = get_db()
             db.cursor().executescript(f.read())
-        db.commit()
-
+            db.commit()
+            db.close()
+        with app.open_resource('insertData2.sql', 'r') as csvDataFile:
+            csvReader = csv.reader(csvDataFile, delimiter='|')
+            for line in csvReader:
+                db = get_db()
+                print(db);
+                if "thread" in line[0]:
+                    print("Add Thread Entry")
+                    forum_id = line[2]
+                    print(uuid.UUID(line[1]))
+                    print(int(forum_id))
+                    print(line[3])
+                    #thid = uuid.UUID(str(line[1]))
+                    #db.execute("insert into thread (thread_id,forum_id, title) values (?, ?, ?)",(uuid.UUID(line[1]), int(forum_id), line[3]))
+                    db.execute('''insert into thread (thread_id,forum_id, title) values (?, ?, ?)''',
+                               [line[1], int(forum_id), line[3]])
+                    db.commit()
+                    db.close()
+                else:
+                    print("None")
+        with app.open_resource('insertData1.sql', 'r') as csvDataFile:
+            csvReader = csv.reader(csvDataFile, delimiter='|')
+            for line in csvReader:
+                db_number = getdbNumber(uuid.UUID(line[2]))
+                dbs = get_all_db()
+                print(dbs)
+                db = dbs[db_number]
+                print(db)
+                if "post" in line[0]:
+                    print("Add post table entry")
+                    post_id = line[1];
+                    db.execute('''insert into post (post_id,thread_id,user_id,text,timestamp) values (?, ?, ?, ?, ?)''',
+                               [int(post_id), line[2], int(line[3]), line[4], datetime.now()])
+                    db.commit()
+                    db.close()
+                else:
+                    print("None")
 
 @app.cli.command('insertdata')
 def insert_data_command():
@@ -94,6 +167,11 @@ def insert_data_command():
     insert_data()
     print('Dummy data inserted to database')
 
+
+def getdbNumber(thread_id):
+    """Convinient method to identify the database bucket based on the threadid."""
+    dbNumber = int(int(thread_id) % 3)
+    return dbNumber
 # Initial operations completed ###
 
 
@@ -124,6 +202,7 @@ def get_user_id(_id):
     rv = query_db('SELECT user_id FROM user WHERE user_id = ?',
                   [_id], one=True)
     return rv[0] if rv else None
+
 
 # User registration
 @app.route('/users', methods=['POST'])
@@ -214,7 +293,6 @@ def get_forum_user_id(username):
 # GET Operation on forums
 @app.route('/forums', methods=['GET'])
 def get_forum():
-
     forums = query_db('''
            SELECT f.forum_id as id, f.name as name, u.username as creator 
            FROM forum f, user u 
@@ -242,6 +320,8 @@ def post_forums():
     cursor = connection.cursor()
     user_id = get_user_id(request.authorization.username)
     if user_id is not None:
+        forumname = get_forum_name(data['name'])
+        print(forumname)
         if get_forum_name(data['name']):
             return jsonify({"message": "forum with that name already exists"}), 409
         query = "INSERT INTO forum VALUES (NULL,?,?)"
@@ -271,9 +351,8 @@ def get_thread_forum_id(forumid):
 
 
 # Get thread Id
-def get_thread_id():
-    rv = query_db('SELECT thread_id FROM thread ORDER BY thread_id DESC',
-                  one=True)
+def get_thread_id(title):
+    rv = query_db('SELECT thread_id FROM thread where title = ?', [title], one=True)
     return rv[0] if rv else None
 
 
@@ -289,21 +368,42 @@ def get_logged_in_user_id(username):
 # GET Operation on Thread
 @app.route('/forums/<forum_id>', methods=['GET'])
 def get_threads(forum_id):
-    threads = query_db('''select t.thread_id as id,t.title as title, 
-                        (select p.timestamp from post p, thread t 
-                        WHERE t.thread_id = p.thread_id 
-                        and t.forum_id = ? order by p.post_id desc) as timestamp, 
-                        (select u.username from post p, thread t, user u 
-                        WHERE t.thread_id = p.thread_id and t.forum_id = ?  
-                        and p.user_id = u.user_id order by p.post_id asc) as creator, t.title 
-                        from thread t ''', [forum_id, forum_id])
-
+    threads = query_db('''SELECT * from thread where forum_id = ? ''', [forum_id])
+    print("in get")
+    print(threads)
     threadlist = []
     if threads:
         for thread in threads:
-            threadlist.append({"id": thread[0], "title": thread[1], "creator": thread[3], "timestamp": thread[2]})
+            print("in thread")
+            print(thread[0])
+            thread_id = thread[0]
+            posts = query_sharddb(uuid.UUID(thread_id), '''select * from post where post_id = (SELECT min(post_id) from post
+                                                            where thread_id=?)
+                                                            UNION
+                                                            select * from post where post_id = (SELECT max(post_id) from post
+                                                            where thread_id=?)''',
+                                  [str(thread[0]),str(thread[0])],one=False)
+            print(posts)
+            i=0;
+            username=""
+            timestamp=""
+            for post in posts:
+                timestamp = post[4]
+                if(i==0):
+                    users = query_db('''SELECT * from user where user_id = ? limit 1 ''', [post[2]])
+                    for user in users:
+                        username = user
+                        print(username[1])
+                else:
+                    timestamp = post[4];
+                    print(timestamp)
+                i=i+1;
+            threadlist.append({"id": thread[0], "title": thread[2], "creator": username[1], "timestamp": timestamp})
+            print(threadlist)
         return jsonify({'Threads': threadlist}), 200
-    return {}, 404
+    else:
+        print("in else get thread")
+        return jsonify({"message": "forum id not found"}), 404
 
 
 # POST Operation in Thread
@@ -329,22 +429,26 @@ def post_threads(forum_id):
 
         connection = get_db()
         cursor = connection.cursor()
-
-        query = "INSERT INTO thread VALUES (NULL,?,?)"
-        cursor.execute(query, (forum_id, data['title']))
+        thread_id = uuid.uuid4()
+        query = "INSERT INTO thread VALUES (?,?,?)"
+        cursor.execute(query, (str(thread_id), forum_id, data['title']))
         connection.commit()
-
-        thread_id = get_thread_id()
+        connection.close()
+        #thread_id = get_thread_id(data['title'])
         user_id = get_user_id(request.authorization.username)
         if thread_id and user_id:
-            query = "INSERT INTO post VALUES (NULL,?,?,?,?)"
-            cursor.execute(query, (thread_id, user_id, data['text'], datetime.now()))
-            connection.commit()
+            db = get_shard_db(thread_id)
+            print("time of post saving")
+            print(db)
+            query = "INSERT INTO post VALUES (?,?,?,?,?)"
+            db.execute('''INSERT INTO post(thread_id, user_id, text, timestamp) VALUES (?,?,?,?)''',
+                       [str(thread_id), user_id, data['text'], datetime.now()])
+            db.commit()
+            db.close()
 
             resp = Response(status=201, mimetype='application/json')
             resp.headers['Location'] = 'http://127.0.0.1:5000/forums/' + str(forum_id) +'/'+str(thread_id)
 
-        connection.close()
         return resp
 
 
@@ -361,27 +465,46 @@ def get_logged_in_user_id(username):
     return rv[0] if rv else None
 
 
+def query_sharddb(thid,query, args=(), one=False):
+    """Queries the database and returns a list of dictionaries."""
+    print("before get db thid")
+    cur = get_shard_db(thid).execute(query, args)
+    print("after get db thid")
+    rv = cur.fetchall()
+    return (rv[0] if rv else None) if one else rv
+
 # GET operations for POST'S
 @app.route('/forums/<forum_id>/<thread_id>', methods=['GET'])
-def get_posts(forum_id=None, thread_id=None):
+def get_posts(forum_id, thread_id):
     print('inside method')
     # if get_post_thread_id(forum_id, thread_id) is None:
     #     return jsonify({"message":"forum / thread does not exist"}), 404
 
-    posts = query_db('''
-                    SELECT u.username as author, p.text, p.timestamp 
-                    FROM post p, thread t, user u 
-                    where t.thread_id = p.thread_id 
-                    and t.thread_id = ? and t.forum_id = ?  
-                    and u.user_id  = p.user_id 
-                    order by timestamp desc''', [thread_id, forum_id])
+    #user = query_db(uuid.UUID(thread_id), '''select * from thread where thread_id = ?''', [request.json.get('username')],one=True)
+    threads = query_db('''SELECT * from thread where thread_id = ? and forum_id = ?''',[str(thread_id), forum_id])
+
+    posts = query_sharddb(uuid.UUID(thread_id), '''select * from post where thread_id = ?''', [str(thread_id)], one=False)
+    print("in get post")
+    print(posts)
+    print(threads)
+    # posts = query_db('''SELECT * FROM POST
+    #                 SELECT u.username as author, p.text, p.timestamp
+    #                 FROM post p, thread t, user u
+    #                 where t.thread_id = p.thread_id
+    #                 and t.thread_id = ? and t.forum_id = ?
+    #                 and u.user_id  = p.user_id
+    #                 order by timestamp desc''', [thread_id, forum_id])
 
     postlist = []
-    if posts:
+    if posts and threads:
         for post in posts:
-             postlist.append({"author": post[0], "text": post[1], "timestamp": post[2]})
+             users = query_db('''SELECT username from user where user_id = ?''',[post[2]], one=True)
+             for user in users:
+                 postlist.append({"author": user, "text": post[3], "timestamp": post[4]})
         return jsonify({'Posts': postlist}), 200
-    return {}, 404
+    else:
+        print("in else get thread")
+        return jsonify({"message": "forum id/thread_id not found"}), 404
 
 # POST operations for POST'S
 @app.route('/forums/<forum_id>/<thread_id>', methods=['POST'])
@@ -393,17 +516,22 @@ def post_posts(forum_id, thread_id):
                         required=True,
                         help="This field cannot be blank.")
     data = parser.parse_args()
-    thread_id=get_post_thread_id(forum_id, thread_id)
-    print(thread_id);
-    if get_post_thread_id(forum_id, thread_id) is None:
-        return jsonify({"message": "forum / thread does not exist"}), 404
-    connection = get_db()
-    cursor = connection.cursor()
+    # thid=get_post_thread_id(forum_id, thread_id)
+    # print(thid);
+    # if get_post_thread_id(forum_id, thread_id) is None:
+    #     return jsonify({"message": "forum / thread does not exist"}), 404
     user_id = get_user_id(request.authorization.username)
-    query = "INSERT INTO post VALUES (NULL,?,?,?,?)"
-    cursor.execute(query, (thread_id, user_id, data['text'], datetime.now()))
-    connection.commit()
-    resp = Response(status=201, mimetype='application/json')
-    connection.close()
+    if thread_id and user_id:
+        thread_id = uuid.UUID(thread_id)
+        db = get_shard_db(thread_id)
+        query = "INSERT INTO post VALUES (?,?,?,?,?)"
+        db.execute('''INSERT INTO post(thread_id, user_id, text, timestamp) VALUES (?,?,?,?)''',
+                   [str(thread_id), user_id, data['text'], datetime.now()])
+        db.commit()
+        db.close()
+
+        resp = Response(status=201, mimetype='application/json')
+        resp.headers['Location'] = 'http://127.0.0.1:5000/forums/' + str(forum_id) + '/' + str(thread_id)
+
     return resp
 app.run()
